@@ -26,7 +26,11 @@ done
 echo applying commits
 for f in `ls -U /tmp/$$`
 do
-    git apply /tmp/$$/$f
+    # put original commit id in new commit
+    orig=`head -1 /tmp/$$/$f | awk '{print $2}'`
+    echo "$orig $ff"
+    sed -i "s/^---\$/\n[Upstream commit $orig]\n---/" /tmp/$$/$f
+    git am /tmp/$$/$f
 done
 
 rm -r /tmp/$$
