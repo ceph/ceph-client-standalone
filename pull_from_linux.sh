@@ -1,7 +1,7 @@
 #!/bin/sh
 
 upstream=$1
-subdir="fs/staging/ceph"
+subdir="fs/ceph"
 
 last=`cat last_upstream_commit`
 
