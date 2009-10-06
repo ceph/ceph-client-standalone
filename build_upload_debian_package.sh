@@ -42,6 +42,7 @@ mkdir $dir
 
 cd $dir
 cp -a ../* .
+make clean
 
 if [ "$vers" != "$finalvers" ]; then
     echo fixing up changelog
@@ -60,9 +61,19 @@ fi
 # build
 dpkg-buildpackage -rfakeroot
 
+cd ..
+
 # hrm!
 mv ceph-kclient_${finalvers}-1_*.changes ceph-kclient_${finalvers}-1_all.changes
 
 # upload
 rsync -v --progress *deb sage@ceph.newdream.net:debian/dists/$repo/main/binary-all
 rsync -v --progress ceph-kclient_* sage@ceph.newdream.net:debian/dists/$repo/main/source
+
+if [ "$vers" == "$finalvers" ]; then
+    echo build tarball, too.
+    mydir="ceph-kclient-source-$finalvers"
+    cp -a $dir $mydir
+    tar zcvf $mydir.tar.gz $dir/*.[ch] $dir/Makefile $dir/Kconfig $dir/crush/*.[ch] $dir/debian
+fi
+
