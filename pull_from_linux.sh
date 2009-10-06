@@ -35,12 +35,12 @@ do
     echo "$orig $ff"
     sed -i "s/^---\$/\n[Upstream commit $orig]\n---/" /tmp/$$/$f
     git am /tmp/$$/$f
-    if [ -e /tmp/$$/.tags/$orig ]; then
+    if [ -e "/tmp/$$/.tags/$orig" ]; then
 	git tag `cat /tmp/$$/.tags/$orig`
     fi
 done
 
-rm -r /tmp/$$
+#rm -r /tmp/$$
 
 echo $git_ver > last_upstream_commit
 git commit -a -m "merged upstream through $git_ver"
