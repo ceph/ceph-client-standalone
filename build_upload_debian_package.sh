@@ -11,6 +11,12 @@ vers="$major.$minor"
 echo "version $vers"
 
 
+# on right branch?
+if git branch | grep '  backport' ; then
+    echo "** switch to teh backport branch, silly **"
+    exit 1
+fi
+
 repo=$1
 
 if [ "$repo" = "unstable" ]; then
