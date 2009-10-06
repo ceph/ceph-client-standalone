@@ -1,7 +1,7 @@
 #!/bin/sh
 
 upstream=$1
-subdir="fs/staging/ceph"
+subdir="fs/ceph"
 
 last=`cat last_upstream_commit`
 
@@ -10,11 +10,15 @@ echo "last commit was $last"
 
 test -d /tmp/$$ && rm -r /tmp/$$
 mkdir /tmp/$$
+mkdir /tmp/$$/.tags
 
 pushd .
 cd $upstream
 git-format-patch --relative=$subdir -o /tmp/$$ $last
 git_ver=`git-rev-parse HEAD 2>/dev/null`
+for t in `git tag` ; do
+    echo `git-rev-parse $t` > /tmp/$$/.tags/$t
+done
 popd
 
 echo removing empty commits
@@ -31,6 +35,9 @@ do
     echo "$orig $ff"
     sed -i "s/^---\$/\n[Upstream commit $orig]\n---/" /tmp/$$/$f
     git am /tmp/$$/$f
+    if [ -e /tmp/$$/.tags/$orig ]; then
+	git tag `cat /tmp/$$/.tags/$orig`
+    fi
 done
 
 rm -r /tmp/$$
