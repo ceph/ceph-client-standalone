@@ -74,6 +74,7 @@ if [ "$vers" == "$finalvers" ]; then
     echo build tarball, too.
     mydir="ceph-kclient-source-$finalvers"
     cp -a $dir $mydir
-    tar zcvf $mydir.tar.gz $dir/*.[ch] $dir/Makefile $dir/Kconfig $dir/crush/*.[ch] $dir/debian
+    tar zcf $mydir.tar.gz $dir/*.[ch] $dir/Makefile $dir/Kconfig $dir/crush/*.[ch] $dir/debian
+    scp $mydir.tar.gz sage@ceph.newdream.net:ceph.newdream.net/download
 fi
 
