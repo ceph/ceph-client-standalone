@@ -3,6 +3,7 @@ Section: admin
 Priority: optional
 Maintainer: Sage Weil <sage@newdream.net>
 Standards-Version: 3.7.2
+Architecture: all
 
 Package: ceph-kclient-source
 Architecture: all
