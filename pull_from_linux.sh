@@ -14,10 +14,10 @@ mkdir /tmp/$$/.tags
 
 pushd .
 cd $upstream
-git-format-patch --relative=$subdir -o /tmp/$$ $last
-git_ver=`git-rev-parse HEAD 2>/dev/null`
+git format-patch --relative=$subdir -o /tmp/$$ $last
+git_ver=`git rev-parse HEAD 2>/dev/null`
 for t in `git tag` ; do
-    echo $t > /tmp/$$/.tags/`git-rev-parse $t`
+    echo $t > /tmp/$$/.tags/`git rev-parse $t`
 done
 popd
 
