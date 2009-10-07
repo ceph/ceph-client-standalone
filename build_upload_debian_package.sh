@@ -78,3 +78,6 @@ if [ "$vers" == "$finalvers" ]; then
     scp $mydir.tar.gz sage@ceph.newdream.net:ceph.newdream.net/download
 fi
 
+# rebuild index
+ssh sage@ceph.newdream.net build_debian_repo.sh
+
