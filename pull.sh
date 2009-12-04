@@ -100,7 +100,11 @@ mkdir /tmp/$$.tags
 pushd .
 cd $upstream
 for t in `git tag` ; do
-    echo $t > /tmp/$$.tags/`git rev-parse $t`
+    target=`git tag -v $t 2>/dev/null | grep object | awk '{print $2}'`
+    if [ -n "$target" ]; then
+	echo noting tag $t of $target
+	echo $t > /tmp/$$.tags/$target
+    fi
 done
 popd
 
