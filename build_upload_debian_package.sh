@@ -66,6 +66,8 @@ cd ..
 # hrm!
 mv ceph-kclient_${finalvers}-1_*.changes ceph-kclient_${finalvers}-1_all.changes
 
+#exit 0
+
 # upload
 rsync -v --progress *deb sage@ceph.newdream.net:debian/dists/$repo/main/binary-all
 rsync -v --progress ceph-kclient_* sage@ceph.newdream.net:debian/dists/$repo/main/source

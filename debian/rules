@@ -31,7 +31,7 @@ install: build
 	mkdir -p usr/src/modules/ceph
 	mkdir usr/src/modules/ceph/crush
 
-	cp *.[ch] usr/src/modules/ceph
+	cp Makefile *.[ch] usr/src/modules/ceph
 	cp crush/*.[ch] usr/src/modules/ceph/crush
 	touch usr/src/modules/ceph/NEWS
 	touch usr/src/modules/ceph/README
