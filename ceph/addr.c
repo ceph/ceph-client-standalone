@@ -574,8 +574,8 @@ static void writepages_finish(struct ceph_osd_request *req,
 		 * page truncation thread, possibly losing some data that
 		 * raced its way in
 		 */
-		if ((issued & (CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO)) == 0)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
+		if ((issued & (CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO)) == 0)
 			generic_error_remove_page(inode->i_mapping, page);
 #else
 # warning may see stale data with multiple clients vs mmap on kernels <v2.6.32 
