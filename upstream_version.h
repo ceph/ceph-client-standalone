@@ -1,10 +1,12 @@
 #ifndef CEPH_UPSTREAM_VERSION_H
 #define CEPH_UPSTREAM_VERSION_H
 
-#define CEPH_V_MAJOR 2
-#define CEPH_V_MINOR 6
-#define CEPH_V_SUBLEVEL 35
-#define CEPH_V_EXTRAVERSION "-rc3"
+/* upstream kernel version we are based on */
+#define CEPH_UPSTREAM_MAJOR 2
+#define CEPH_UPSTREAM_MINOR 6
+#define CEPH_UPSTREAM_SUBLEVEL 35
+#define CEPH_UPSTREAM_EXTRAVERSION "-rc3"
+
 #define CEPH_VERSION "2.6.35-rc3"
 
 #endif
