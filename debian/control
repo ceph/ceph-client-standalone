@@ -1,19 +1,18 @@
-Source: ceph-kclient
-Section: admin
-Priority: optional
-Maintainer: Sage Weil <sage@newdream.net>
-Standards-Version: 3.7.2
-Architecture: all
+Source: ceph-dkms
+Section: net
+Priority: extra
+Maintainer: Thomas Mueller <thomas@chaschperli.ch>
+Build-Depends: debhelper (>= 7.4.2~)
+Standards-Version: 3.8.4
+Vcs-Git: http://ceph.newdream.net/git/ceph-client-standalone.git
+Vcs-Browser: http://ceph.newdream.net/git/?p=ceph-client-standalone.git;a=summary
+Homepage: http://ceph.newdream.net
 
-Package: ceph-kclient-source
+Package: ceph-dkms
 Architecture: all
-Depends: ${shlibs:Depends}, ${misc:Depends}, make
-Description: source for client kernel module for the Ceph distributed file system
- Ceph is a distributed network file system designed to provide
- excellent performance, reliability, and scalability.  This is the
- Ceph client source package for building the client kernel module.
+Replaces: ceph-kclient-source
+Depends: ${shlibs:Depends}, ${misc:Depends}, dkms
+Description: ceph fs kernel driver [DKMS driver source]
  .
- This native kernel client is faster and is more robust than the 
- FUSE-based client (ceph-fuse).  However, you need to compile the
- module against your running kernel and will need root privileges
- to load it.
+ This package provides the Linux kernel module source which has been
+ prepared for use with DKMS.

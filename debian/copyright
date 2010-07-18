@@ -1,3 +1,6 @@
+The package was rewritten to dkms by Thomas Mueller <thomas@chaschperli.ch>
+Wed, 07 Jul 2010 11:00:17 +0200
+
 This package was debianized by Sage Weil <sage@newdream.net> on
 Mon, 28 Jan 2008 14:58:17 -0800.
 
