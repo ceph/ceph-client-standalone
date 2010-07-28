@@ -1,4 +1,7 @@
 #!/bin/sh
+# 
+# * copies files to /usr/src/ceph-$CEPH_VERSION (dkms fixed location "-c" switch did not work for me)
+# * adds the module to dkms and builds it
 
 if ! [ -f ./upstream_version.h ]
 then
