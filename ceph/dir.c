@@ -1109,9 +1109,15 @@ static ssize_t ceph_read_dir(struct file *file, char __user *buf, size_t size,
  * an fsync() on a dir will wait for any uncommitted directory
  * operations to commit.
  */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
+static int ceph_dir_fsync(struct file *file, struct dentry *dentry, int datasync)
+{
+	struct inode *inode = dentry->d_inode;
+#else
 static int ceph_dir_fsync(struct file *file, int datasync)
 {
 	struct inode *inode = file->f_path.dentry->d_inode;
+#endif
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct list_head *head = &ci->i_unsafe_dirops;
 	struct ceph_mds_request *req;
@@ -1227,14 +1233,6 @@ unsigned ceph_dentry_hash(struct dentry *dn)
 	}
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
-static int ceph_dir_fsync_wrapper(struct file *file, struct dentry *dentry, int ds)
-{
-	return ceph_dir_fsync(file, ds);
-}
-#endif
-
-
 const struct file_operations ceph_dir_fops = {
 	.read = ceph_read_dir,
 	.readdir = ceph_readdir,
@@ -1242,11 +1240,7 @@ const struct file_operations ceph_dir_fops = {
 	.open = ceph_open,
 	.release = ceph_release,
 	.unlocked_ioctl = ceph_ioctl,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
-	.fsync = ceph_dir_fsync_wrapper,
-#else
 	.fsync = ceph_dir_fsync,
-#endif
 };
 
 const struct inode_operations ceph_dir_iops = {
