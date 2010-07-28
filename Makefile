@@ -22,7 +22,8 @@ else
 #Otherwise we were called directly from the command
 # line; invoke the kernel build system.
 
-KERNELDIR ?= /lib/modules/$(shell uname -r)/build
+KERNELRELEASE ?= $(shell uname -r)
+KERNELDIR ?= /lib/modules/$(KERNELRELEASE)/build
 PWD := $(shell pwd)
 
 default: all

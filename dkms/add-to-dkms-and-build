@@ -1,0 +1,15 @@
+#!/bin/sh
+
+if ! [ -f ./upstream_version.h ]
+then
+	echo "Failure: ./upstream_version.h not found. Did you call this script from ceph-client root?"
+fi
+
+CEPH_VERSION=$(grep CEPH_VERSION upstream_version.h | egrep -o "[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+[^\"]+")
+
+mkdir /usr/src/ceph-${CEPH_VERSION} || exit 1
+cp -r ./ /usr/src/ceph-${CEPH_VERSION}
+
+dkms add -m ceph -v ${CEPH_VERSION} &&
+dkms build -m ceph -v ${CEPH_VERSION} &&
+dkms install -m ceph -v ${CEPH_VERSION}
