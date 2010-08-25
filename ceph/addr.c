@@ -118,7 +118,19 @@ static int ceph_set_page_dirty(struct page *page)
 #endif
 	if (page->mapping) {	/* Race with truncate? */
 		WARN_ON_ONCE(!PageUptodate(page));
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35)
 		account_page_dirtied(page, page->mapping);
+#else
+		if (mapping_cap_account_dirty(mapping)) {
+			__inc_zone_page_state(page, NR_FILE_DIRTY);
+			__inc_bdi_stat(mapping->backing_dev_info,
+					BDI_RECLAIMABLE);
+			task_io_account_write(PAGE_CACHE_SIZE);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
+			task_dirty_inc(current);
+#endif
+		}
+#endif
 		radix_tree_tag_set(&mapping->page_tree,
 				page_index(page), PAGECACHE_TAG_DIRTY);
 
