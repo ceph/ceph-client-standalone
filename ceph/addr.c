@@ -118,7 +118,7 @@ static int ceph_set_page_dirty(struct page *page)
 #endif
 	if (page->mapping) {	/* Race with truncate? */
 		WARN_ON_ONCE(!PageUptodate(page));
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
 		account_page_dirtied(page, page->mapping);
 #else
 		if (mapping_cap_account_dirty(mapping)) {
