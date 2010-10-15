@@ -578,20 +578,7 @@ static void writepages_finish(struct ceph_osd_request *req,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 			generic_error_remove_page(inode->i_mapping, page);
 #else
-		{
-			/* do truncate_inode_page(inode->i_mapping, page); */
-			if (page_mapped(page)) {
-				unmap_mapping_range(inode->i_mapping,
-				    (loff_t)page->index << PAGE_CACHE_SHIFT,
-				    PAGE_CACHE_SIZE, 0);
-			}
-			if (PagePrivate(page))
-				do_invalidatepage(page, 0);
-			cancel_dirty_page(page, PAGE_CACHE_SIZE);
-			remove_from_page_cache(page);
-			ClearPageMappedToDisk(page);
-			page_cache_release(page);
-		}
+# warning may see stale data with multiple clients vs mmap on kernels <v2.6.32 
 #endif
 
 		unlock_page(page);
