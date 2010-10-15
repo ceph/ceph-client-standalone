@@ -525,7 +525,9 @@ static void writepages_finish(struct ceph_osd_request *req,
 	u64 bytes = 0;
 	struct ceph_fs_client *fsc = ceph_inode_to_client(inode);
 	long writeback_stat;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 	unsigned issued = ceph_caps_issued(ci);
+#endif
 
 	/* parse reply */
 	replyhead = msg->front.iov_base;
