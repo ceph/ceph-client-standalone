@@ -1239,6 +1239,14 @@ unsigned ceph_dentry_hash(struct dentry *dn)
 	}
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
+static int ceph_dir_fsync_wrapper(struct file *file, struct dentry *dentry, int ds)
+{
+	return ceph_dir_fsync(file, ds);
+}
+#endif
+
+
 const struct file_operations ceph_dir_fops = {
 	.read = ceph_read_dir,
 	.readdir = ceph_readdir,
@@ -1246,7 +1254,11 @@ const struct file_operations ceph_dir_fops = {
 	.open = ceph_open,
 	.release = ceph_release,
 	.unlocked_ioctl = ceph_ioctl,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
+	.fsync = ceph_dir_fsync_wrapper,
+#else
 	.fsync = ceph_dir_fsync,
+#endif
 };
 
 const struct inode_operations ceph_dir_iops = {

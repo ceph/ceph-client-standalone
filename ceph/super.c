@@ -889,7 +889,12 @@ static struct dentry *ceph_mount(struct file_system_type *fs_type,
 
 out_splat:
 	ceph_mdsc_close_sessions(fsc->mdsc);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 30)
 	deactivate_locked_super(sb);
+#else
+	up_write(&sb->s_umount);
+	deactivate_super(sb);
+#endif
 	goto out_final;
 
 out:
