@@ -729,7 +729,11 @@ retry_snap:
 		    ((file->f_flags & O_SYNC) || IS_SYNC(file->f_mapping->host)
 		     || ceph_osdmap_flag(osdc->osdmap, CEPH_OSDMAP_NEARFULL))) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
+# if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35)
 			err = vfs_fsync_range(file, pos, pos + ret - 1, 1);
+# else
+			err = vfs_fsync_range(file, file->f_dentry, pos, pos + ret - 1, 1);
+# endif
 #else
 			err = sync_page_range(inode, &inode->i_data, pos, ret);
 #endif
@@ -808,6 +812,13 @@ out:
 	return offset;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
+static int ceph_fsync_wrapper(struct file *file, struct dentry *dentry, int ds)
+{
+	return ceph_fsync(file, ds);
+}
+#endif
+
 const struct file_operations ceph_file_fops = {
 	.open = ceph_open,
 	.release = ceph_release,
@@ -817,7 +828,11 @@ const struct file_operations ceph_file_fops = {
 	.aio_read = ceph_aio_read,
 	.aio_write = ceph_aio_write,
 	.mmap = ceph_mmap,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
+	.fsync = ceph_fsync_wrapper,
+#else
 	.fsync = ceph_fsync,
+#endif
 	.lock = ceph_lock,
 	.flock = ceph_flock,
 	.splice_read = generic_file_splice_read,
