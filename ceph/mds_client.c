@@ -2429,6 +2429,11 @@ static int encode_caps_cb(struct inode *inode, struct ceph_cap *cap,
 		int num_fcntl_locks, num_flock_locks;
 		struct ceph_pagelist_cursor trunc_point;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36)
+# define lock_flocks() lock_kernel()
+# define unlock_flocks() unlock_kernel();
+#endif
+
 		ceph_pagelist_set_cursor(pagelist, &trunc_point);
 		do {
 			lock_flocks();
