@@ -1939,8 +1939,13 @@ int ceph_mdsc_do_request(struct ceph_mds_client *mdsc,
 	mutex_unlock(&mdsc->mutex);
 	dout("do_request waiting\n");
 	if (req->r_timeout) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35)
 		err = (long)wait_for_completion_killable_timeout(
 			&req->r_completion, req->r_timeout);
+#else
+		err = (long)wait_for_completion_interruptible_timeout(
+			&req->r_completion, req->r_timeout);
+#endif
 		if (err == 0)
 			err = -EIO;
 	} else {
