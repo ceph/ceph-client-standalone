@@ -527,3 +527,6 @@ MODULE_AUTHOR("Yehuda Sadeh <yehuda@hq.newdream.net>");
 MODULE_AUTHOR("Patience Warnick <patience@newdream.net>");
 MODULE_DESCRIPTION("Ceph filesystem for Linux");
 MODULE_LICENSE("GPL");
+
+#include "../upstream_version.h"
+MODULE_VERSION(CEPH_VERSION);
