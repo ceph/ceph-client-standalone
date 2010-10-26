@@ -1841,3 +1841,6 @@ MODULE_DESCRIPTION("rados block device");
 MODULE_AUTHOR("Jeff Garzik <jeff@garzik.org>");
 
 MODULE_LICENSE("GPL");
+
+#include "../upstream_version.h"
+MODULE_VERSION(CEPH_VERSION);
