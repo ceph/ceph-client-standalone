@@ -126,9 +126,6 @@ static int ceph_set_page_dirty(struct page *page)
 			__inc_bdi_stat(mapping->backing_dev_info,
 					BDI_RECLAIMABLE);
 			task_io_account_write(PAGE_CACHE_SIZE);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
-			task_dirty_inc(current);
-#endif
 		}
 #endif
 		radix_tree_tag_set(&mapping->page_tree,
