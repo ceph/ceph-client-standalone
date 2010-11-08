@@ -599,7 +599,11 @@ static inline int default_congestion_kb(void)
 	 * This allows larger machines to have larger/more transfers.
 	 * Limit the default to 256M
 	 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 	congestion_kb = (16*int_sqrt(totalram_pages)) << (PAGE_SHIFT-10);
+#else
+	congestion_kb = (16*int_sqrt(num_physpages)) << (PAGE_SHIFT-10);
+#endif
 	if (congestion_kb > 256*1024)
 		congestion_kb = 256*1024;
 
@@ -701,7 +705,11 @@ extern void ceph_put_cap(struct ceph_mds_client *mdsc,
 			 struct ceph_cap *cap);
 
 extern void ceph_queue_caps_release(struct inode *inode);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 34)
 extern int ceph_write_inode(struct inode *inode, struct writeback_control *wbc);
+#else
+extern int ceph_write_inode(struct inode *inode, int wait);
+#endif
 extern int ceph_fsync(struct file *file, int datasync);
 extern void ceph_kick_flushing_caps(struct ceph_mds_client *mdsc,
 				    struct ceph_mds_session *session);

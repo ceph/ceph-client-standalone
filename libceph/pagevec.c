@@ -205,20 +205,33 @@ void ceph_zero_page_vector_range(int off, int len, struct page **pages)
 		int end = min((int)PAGE_CACHE_SIZE, off + len);
 		dout("zeroing %d %p head from %d\n", i, pages[i],
 		     (int)off);
-		zero_user_segment(pages[i], off, end);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25)
+  		zero_user_segment(pages[i], off, end);
+#else
+ 		zero_user_page(pages[i], off, PAGE_CACHE_SIZE - off,
+			       KM_USER0);
+#endif
 		len -= (end - off);
 		i++;
 	}
 	while (len >= PAGE_CACHE_SIZE) {
 		dout("zeroing %d %p len=%d\n", i, pages[i], len);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25)
 		zero_user_segment(pages[i], 0, PAGE_CACHE_SIZE);
+#else
+		zero_user_page(pages[i], 0, PAGE_CACHE_SIZE, KM_USER0);
+#endif
 		len -= PAGE_CACHE_SIZE;
 		i++;
 	}
 	/* trailing partial page? */
 	if (len) {
 		dout("zeroing %d %p tail to %d\n", i, pages[i], (int)len);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25)
 		zero_user_segment(pages[i], 0, len);
+#else
+		zero_user_page(pages[i], 0, PAGE_CACHE_SIZE - len, KM_USER0);
+#endif
 	}
 }
 EXPORT_SYMBOL(ceph_zero_page_vector_range);

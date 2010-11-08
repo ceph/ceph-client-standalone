@@ -187,7 +187,9 @@ DEFINE_SIMPLE_ATTRIBUTE(congestion_kb_fops, congestion_kb_get,
 void ceph_fs_debugfs_cleanup(struct ceph_fs_client *fsc)
 {
 	dout("ceph_fs_debugfs_cleanup\n");
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 	debugfs_remove(fsc->debugfs_bdi);
+#endif
 	debugfs_remove(fsc->debugfs_congestion_kb);
 	debugfs_remove(fsc->debugfs_mdsmap);
 	debugfs_remove(fsc->debugfs_caps);
@@ -212,6 +214,7 @@ int ceph_fs_debugfs_init(struct ceph_fs_client *fsc)
 
 	dout("a\n");
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 	snprintf(name, sizeof(name), "../../bdi/%s",
 		 dev_name(fsc->backing_dev_info.dev));
 	fsc->debugfs_bdi =
@@ -220,6 +223,7 @@ int ceph_fs_debugfs_init(struct ceph_fs_client *fsc)
 				       name);
 	if (!fsc->debugfs_bdi)
 		goto out;
+#endif
 
 	dout("b\n");
 	fsc->debugfs_mdsmap = debugfs_create_file("mdsmap",
