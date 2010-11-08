@@ -720,7 +720,11 @@ retry_snap:
 		if ((ret >= 0 || ret == -EIOCBQUEUED) &&
 		    ((file->f_flags & O_SYNC) || IS_SYNC(file->f_mapping->host)
 		     || ceph_osdmap_flag(osdc->osdmap, CEPH_OSDMAP_NEARFULL))) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 			err = vfs_fsync_range(file, pos, pos + ret - 1, 1);
+#else
+			err = sync_page_range(inode, &inode->i_data, pos, ret);
+#endif
 			if (err < 0)
 				ret = err;
 		}

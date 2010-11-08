@@ -13,6 +13,14 @@
 #include "mds_client.h"
 #include "../include-ceph/osd_client.h"
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 30)
+# include <linux/blkdev.h>
+#endif
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 30)
+# define BLK_RW_ASYNC 0
+#endif
+
+
 /*
  * Ceph address space ops.
  *
@@ -103,7 +111,11 @@ static int ceph_set_page_dirty(struct page *page)
 	spin_unlock(&inode->i_lock);
 
 	/* now adjust page */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
 	spin_lock_irq(&mapping->tree_lock);
+#else
+	write_lock_irq(&mapping->tree_lock);
+#endif
 	if (page->mapping) {	/* Race with truncate? */
 		WARN_ON_ONCE(!PageUptodate(page));
 		account_page_dirtied(page, page->mapping);
@@ -121,7 +133,11 @@ static int ceph_set_page_dirty(struct page *page)
 		undo = 1;
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
 	spin_unlock_irq(&mapping->tree_lock);
+#else
+	write_unlock_irq(&mapping->tree_lock);
+#endif
 
 	if (undo)
 		/* whoops, we failed to dirty the page */
@@ -212,7 +228,11 @@ static int readpage_nounlock(struct file *filp, struct page *page)
 		goto out;
 	} else if (err < PAGE_CACHE_SIZE) {
 		/* zero fill remainder of page */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25)
 		zero_user_segment(page, err, PAGE_CACHE_SIZE);
+#else
+		zero_user_page(page, err, PAGE_CACHE_SIZE - err, KM_USER0);
+#endif
 	}
 	SetPageUptodate(page);
 
@@ -303,7 +323,11 @@ static int ceph_readpages(struct file *file, struct address_space *mapping,
 		if (rc < (int)PAGE_CACHE_SIZE) {
 			/* zero (remainder of) page */
 			int s = rc < 0 ? 0 : rc;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25)
 			zero_user_segment(page, s, PAGE_CACHE_SIZE);
+#else
+			zero_user_page(page, s, PAGE_CACHE_SIZE-s, KM_USER0);
+#endif
 		}
 
 		if (add_to_page_cache_lru(page, mapping, page->index,
@@ -551,7 +575,13 @@ static void writepages_finish(struct ceph_osd_request *req,
 		 * raced its way in
 		 */
 		if ((issued & (CEPH_CAP_FILE_CACHE|CEPH_CAP_FILE_LAZYIO)) == 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 			generic_error_remove_page(inode->i_mapping, page);
+#else
+		        truncate_inode_pages_range(inode->i_mapping,
+				   page->index << PAGE_CACHE_SHIFT,
+				   ((page->index + 1) << PAGE_CACHE_SHIFT)-1);
+#endif
 
 		unlock_page(page);
 	}
@@ -701,7 +731,11 @@ get_more_pages:
 			dout("? %p idx %lu\n", page, page->index);
 			if (locked_pages == 0)
 				lock_page(page);  /* first page */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
 			else if (!trylock_page(page))
+#else
+			else if (TestSetPageLocked(page))
+#endif
 				break;
 
 			/* only dirty pages, or our accounting breaks */
@@ -988,9 +1022,13 @@ retry_locked:
 	     end_in_page - pos_in_page != PAGE_CACHE_SIZE)) {
 		dout(" zeroing %p 0 - %d and %d - %d\n",
 		     page, pos_in_page, end_in_page, (int)PAGE_CACHE_SIZE);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
 		zero_user_segments(page,
 				   0, pos_in_page,
 				   end_in_page, PAGE_CACHE_SIZE);
+#else
+		simple_prepare_write(file, page, pos_in_page, end_in_page);
+#endif
 		return 0;
 	}
 
@@ -1023,7 +1061,11 @@ static int ceph_write_begin(struct file *file, struct address_space *mapping,
 
 	do {
 		/* get a page */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
 		page = grab_cache_page_write_begin(mapping, index, 0);
+#else
+		page = __grab_cache_page(mapping, index);
+#endif
 		if (!page)
 			return -ENOMEM;
 		*pagep = page;
@@ -1056,8 +1098,13 @@ static int ceph_write_end(struct file *file, struct address_space *mapping,
 	     inode, page, (int)pos, (int)copied, (int)len);
 
 	/* zero the stale part of the page if we did a short copy */
-	if (copied < len)
+	if (copied < len) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25)
 		zero_user_segment(page, from+copied, len);
+#else
+		zero_user_page(page, from+copied, len-copied, KM_USER0);
+#endif
+	}
 
 	/* did file size increase? */
 	/* (no need for i_size_read(); we caller holds i_mutex */
@@ -1113,10 +1160,16 @@ const struct address_space_operations ceph_aops = {
 /*
  * Reuse write_begin here for simplicity.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 30)
 static int ceph_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
+#else
+static int ceph_page_mkwrite(struct vm_area_struct *vma, struct page *page)
+#endif
 {
 	struct inode *inode = vma->vm_file->f_dentry->d_inode;
-	struct page *page = vmf->page;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 30)
+  	struct page *page = vmf->page;
+#endif
 	struct ceph_mds_client *mdsc = ceph_inode_to_client(inode)->mdsc;
 	loff_t off = page->index << PAGE_CACHE_SHIFT;
 	loff_t size, len;
@@ -1143,17 +1196,25 @@ static int ceph_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 		/* success.  we'll keep the page locked. */
 		set_page_dirty(page);
 		up_read(&mdsc->snap_rwsem);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 30)
 		ret = VM_FAULT_LOCKED;
+#else
+		unlock_page(page);
+#endif
 	} else {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 30)
 		if (ret == -ENOMEM)
 			ret = VM_FAULT_OOM;
 		else
 			ret = VM_FAULT_SIGBUS;
+#endif
 	}
 out:
 	dout("page_mkwrite %p %llu~%llu = %d\n", inode, off, len, ret);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 30)
 	if (ret != VM_FAULT_LOCKED)
 		unlock_page(page);
+#endif
 	return ret;
 }
 
