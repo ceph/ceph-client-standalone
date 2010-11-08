@@ -1849,13 +1849,19 @@ int ceph_fsync(struct file *file, int datasync)
  * get by with fewer MDS messages if we wait for data writeback to
  * complete first.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 34)
 int ceph_write_inode(struct inode *inode, struct writeback_control *wbc)
+#else
+int ceph_write_inode(struct inode *inode, int wait)
+#endif
 {
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	unsigned flush_tid;
 	int err = 0;
 	int dirty;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 34)
 	int wait = wbc->sync_mode == WB_SYNC_ALL;
+#endif
 
 	dout("write_inode %p wait=%d\n", inode, wait);
 	if (wait) {

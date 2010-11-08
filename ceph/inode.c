@@ -1393,7 +1393,13 @@ static void ceph_invalidate_nondirty_pages(struct address_space *mapping)
 			if (skip_page)
 				continue;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 			generic_error_remove_page(mapping, page);
+#else
+		        truncate_inode_pages_range(mapping,
+				   page->index << PAGE_CACHE_SHIFT,
+				   ((page->index + 1) << PAGE_CACHE_SHIFT)-1);
+#endif
 			unlock_page(page);
 		}
 		pagevec_release(&pvec);
@@ -1511,8 +1517,13 @@ retry:
 		dout("__do_pending_vmtruncate %p flushing snaps first\n",
 		     inode);
 		spin_unlock(&inode->i_lock);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 30)
 		filemap_write_and_wait_range(&inode->i_data, 0,
 					     inode->i_sb->s_maxbytes);
+#else
+# warning i may not flush all data after a snapshot + truncate w/ < 2.6.30
+		filemap_write_and_wait(&inode->i_data);
+#endif
 		goto retry;
 	}
 

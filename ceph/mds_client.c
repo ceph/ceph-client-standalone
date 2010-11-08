@@ -572,8 +572,13 @@ static void __register_request(struct ceph_mds_client *mdsc,
 	ceph_mdsc_get_request(req);
 	__insert_request(mdsc, req);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
 	req->r_uid = current_fsuid();
 	req->r_gid = current_fsgid();
+#else
+	req->r_uid = current->fsuid;
+	req->r_gid = current->fsgid;
+#endif
 
 	if (dir) {
 		struct ceph_inode_info *ci = ceph_inode(dir);
