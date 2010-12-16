@@ -7,6 +7,10 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 37)
+# include <linux/smp_lock.h>
+#endif
+
 #include "super.h"
 #include "mds_client.h"
 
