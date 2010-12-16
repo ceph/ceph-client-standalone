@@ -11,6 +11,10 @@
 #include <linux/vmalloc.h>
 #include <linux/pagevec.h>
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 37)
+# include <linux/smp_lock.h>
+#endif
+
 #include "super.h"
 #include "mds_client.h"
 #include "../include-ceph/decode.h"
