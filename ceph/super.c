@@ -672,8 +672,13 @@ static struct dentry *open_root_dentry(struct ceph_fs_client *fsc,
 /*
  * mount: join the ceph cluster, and open root directory.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 static struct dentry *ceph_real_mount(struct ceph_fs_client *fsc,
 		      const char *path)
+#else
+static int ceph_real_mount(struct ceph_fs_client *fsc, struct vfsmount *mnt,
+		      const char *path)
+#endif
 {
 	int err;
 	unsigned long started = jiffies;  /* note the start time */
@@ -715,14 +720,27 @@ static struct dentry *ceph_real_mount(struct ceph_fs_client *fsc,
 		}
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 37)
+	mnt->mnt_root = root;
+	mnt->mnt_sb = fsc->sb;
+#endif
+
 	fsc->mount_state = CEPH_MOUNT_MOUNTED;
 	dout("mount success\n");
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 37)
+	err = 0;
+
+out:
+	mutex_unlock(&fsc->client->mount_mutex);
+	return err;
+#else
 	mutex_unlock(&fsc->client->mount_mutex);
 	return root;
 
 out:
 	mutex_unlock(&fsc->client->mount_mutex);
 	return ERR_PTR(err);
+#endif
 
 fail:
 	if (first) {
@@ -819,29 +837,47 @@ static int ceph_register_bdi(struct super_block *sb,
 	return err;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 static struct dentry *ceph_mount(struct file_system_type *fs_type,
 		       int flags, const char *dev_name, void *data)
+#else
+static int ceph_get_sb(struct file_system_type *fs_type,
+		       int flags, const char *dev_name, void *data,
+		       struct vfsmount *mnt)
+#endif
 {
 	struct super_block *sb;
 	struct ceph_fs_client *fsc;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 	struct dentry *res;
+#endif
 	int err;
 	int (*compare_super)(struct super_block *, void *) = ceph_compare_super;
 	const char *path = NULL;
 	struct ceph_mount_options *fsopt = NULL;
 	struct ceph_options *opt = NULL;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 	dout("ceph_mount\n");
+#else
+	dout("ceph_get_sb\n");
+#endif
 	err = parse_mount_options(&fsopt, &opt, flags, data, dev_name, &path);
 	if (err < 0) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 		res = ERR_PTR(err);
+#endif
 		goto out_final;
 	}
 
 	/* create client (which we may/may not use) */
 	fsc = create_fs_client(fsopt, opt);
 	if (IS_ERR(fsc)) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 		res = ERR_CAST(fsc);
+#else
+		err = PTR_ERR(fsc);
+#endif
 		kfree(fsopt);
 		kfree(opt);
 		goto out_final;
@@ -849,7 +885,9 @@ static struct dentry *ceph_mount(struct file_system_type *fs_type,
 
 	err = ceph_mdsc_init(fsc);
 	if (err < 0) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 		res = ERR_PTR(err);
+#endif
 		goto out;
 	}
 
@@ -857,7 +895,11 @@ static struct dentry *ceph_mount(struct file_system_type *fs_type,
 		compare_super = NULL;
 	sb = sget(fs_type, compare_super, ceph_set_super, fsc);
 	if (IS_ERR(sb)) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 		res = ERR_CAST(sb);
+#else
+		err = PTR_ERR(sb);
+#endif
 		goto out;
 	}
 
@@ -870,17 +912,28 @@ static struct dentry *ceph_mount(struct file_system_type *fs_type,
 		dout("get_sb using new client %p\n", fsc);
 		err = ceph_register_bdi(sb, fsc);
 		if (err < 0) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 			res = ERR_PTR(err);
+#endif
 			goto out_splat;
 		}
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 	res = ceph_real_mount(fsc, path);
 	if (IS_ERR(res))
 		goto out_splat;
 	dout("root %p inode %p ino %llx.%llx\n", res,
 	     res->d_inode, ceph_vinop(res->d_inode));
 	return res;
+#else
+	err = ceph_real_mount(fsc, mnt, path);
+	if (err < 0)
+		goto out_splat;
+	dout("root %p inode %p ino %llx.%llx\n", mnt->mnt_root,
+	     mnt->mnt_root->d_inode, ceph_vinop(mnt->mnt_root->d_inode));
+	return 0;
+#endif
 
 out_splat:
 	ceph_mdsc_close_sessions(fsc->mdsc);
@@ -896,8 +949,13 @@ out:
 	ceph_mdsc_destroy(fsc);
 	destroy_fs_client(fsc);
 out_final:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 	dout("ceph_mount fail %ld\n", PTR_ERR(res));
 	return res;
+#else
+	dout("ceph_get_sb fail %d\n", err);
+	return err;
+#endif
 }
 
 static void ceph_kill_sb(struct super_block *s)
@@ -913,7 +971,11 @@ static void ceph_kill_sb(struct super_block *s)
 static struct file_system_type ceph_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "ceph",
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
 	.mount		= ceph_mount,
+#else
+	.get_sb         = ceph_get_sb,
+#endif
 	.kill_sb	= ceph_kill_sb,
 	.fs_flags	= FS_RENAME_DOES_D_MOVE,
 };
