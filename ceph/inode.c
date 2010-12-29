@@ -10,9 +10,9 @@
 #include <linux/writeback.h>
 #include <linux/vmalloc.h>
 #include <linux/pagevec.h>
-
+#include <linux/version.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 37)
-# include <linux/smp_lock.h>
+#include <linux/smp_lock.h>
 #endif
 
 #include "super.h"
