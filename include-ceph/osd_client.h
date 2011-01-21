@@ -32,6 +32,7 @@ struct ceph_osd {
 	struct rb_node o_node;
 	struct ceph_connection o_con;
 	struct list_head o_requests;
+	struct list_head o_ling_requests;
 	struct list_head o_osd_lru;
 	struct ceph_authorizer *o_authorizer;
 	void *o_authorizer_buf, *o_authorizer_reply_buf;
@@ -47,6 +48,8 @@ struct ceph_osd_request {
 	struct rb_node  r_node;
 	struct list_head r_req_lru_item;
 	struct list_head r_osd_item;
+	struct list_head r_ling_item;
+	struct list_head r_ling_osd;
 	struct ceph_osd *r_osd;
 	struct ceph_pg   r_pgid;
 	int              r_pg_osds[CEPH_PG_MAX_SIZE];
@@ -59,6 +62,7 @@ struct ceph_osd_request {
 	int               r_flags;     /* any additional flags for the osd */
 	u32               r_sent;      /* >0 if r_request is sending/sent */
 	int               r_got_reply;
+	int		  r_linger;
 
 	struct ceph_osd_client *r_osdc;
 	struct kref       r_kref;
@@ -89,6 +93,25 @@ struct ceph_osd_request {
 	struct ceph_pagelist *r_trail;	      /* trailing part of the data */
 };
 
+struct ceph_osdc_watcher {
+	u64 cookie;
+	struct ceph_osd_client *osdc;
+	void (*cb)(u64, u64, u8, void *);
+	void *data;
+	struct rb_node node;
+	struct list_head osd_node;
+	struct kref kref;
+	struct completion completion;
+};
+
+struct ceph_osdc_watch_work {
+	struct work_struct work;
+	struct ceph_osdc_watcher *watcher;
+        u64 ver;
+        u64 notify_id;
+        u8 opcode;
+};
+
 struct ceph_osd_client {
 	struct ceph_client     *client;
 
@@ -98,6 +121,7 @@ struct ceph_osd_client {
 	u64                    last_requested_map;
 
 	struct mutex           request_mutex;
+	struct mutex	       linger_mutex;
 	struct rb_root         osds;          /* osds */
 	struct list_head       osd_lru;       /* idle osds */
 	u64                    timeout_tid;   /* tid of timeout triggering rq */
@@ -106,6 +130,7 @@ struct ceph_osd_client {
 	struct list_head       req_lru;	      /* in-flight lru */
 	struct list_head       req_unsent;    /* unsent/need-resend queue */
 	struct list_head       req_notarget;  /* map to no osd */
+	struct list_head       lingering_req; /* lingering requests */
 	int                    num_requests;
 	struct delayed_work    timeout_work;
 	struct delayed_work    osds_timeout_work;
@@ -117,6 +142,12 @@ struct ceph_osd_client {
 
 	struct ceph_msgpool	msgpool_op;
 	struct ceph_msgpool	msgpool_op_reply;
+
+	spinlock_t		watch_lock;
+	struct rb_root		watch_tree;
+	u64			watch_count;
+
+	struct workqueue_struct	*notify_wq;
 };
 
 struct ceph_osd_req_op {
@@ -151,6 +182,13 @@ struct ceph_osd_req_op {
 	        struct {
 		        u64 snapid;
 	        } snap;
+		struct {
+			u64 cookie;
+			u64 ver;
+			__u8 flag;
+			u32 prot_ver;
+			u32 timeout;
+		} watch;
 	};
 	u32 payload_len;
 };
@@ -199,6 +237,13 @@ extern struct ceph_osd_request *ceph_osdc_new_request(struct ceph_osd_client *,
 				      bool use_mempool, int num_reply,
 				      int page_align);
 
+extern void ceph_osdc_set_request_linger(struct ceph_osd_client *osdc,
+					 struct ceph_osd_request *req,
+					 int linger);
+
+extern void ceph_osdc_remove_ling_req(struct ceph_osd_client *osdc,
+				       struct ceph_osd_request *req);
+
 static inline void ceph_osdc_get_request(struct ceph_osd_request *req)
 {
 	kref_get(&req->r_kref);
@@ -234,5 +279,14 @@ extern int ceph_osdc_writepages(struct ceph_osd_client *osdc,
 				struct page **pages, int nr_pages,
 				int flags, int do_sync, bool nofail);
 
+extern int ceph_osdc_register_notify_msg(struct ceph_osd_client *osdc,
+				     void (*watch_cb)(u64, u64, u8, void *),
+				     void *data,
+				     struct ceph_osdc_watcher **pwatcher);
+
+extern void ceph_osdc_put_watcher( struct ceph_osdc_watcher *watcher);
+
+extern int ceph_osdc_wait_watch_notify(struct ceph_osdc_watcher *watcher,
+				       unsigned long timeout);
 #endif
 

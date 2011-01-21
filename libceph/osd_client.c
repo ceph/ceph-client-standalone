@@ -23,8 +23,13 @@
 
 static const struct ceph_connection_operations osd_con_ops;
 
+static int __kick_lingering_reqs(struct ceph_osd_client *osdc);
 static void send_queued(struct ceph_osd_client *osdc);
 static int __reset_osd(struct ceph_osd_client *osdc, struct ceph_osd *osd);
+static void __register_request(struct ceph_osd_client *osdc,
+			       struct ceph_osd_request *req);
+static int __send_request(struct ceph_osd_client *osdc,
+			  struct ceph_osd_request *req);
 
 static int op_needs_trail(int op)
 {
@@ -33,6 +38,7 @@ static int op_needs_trail(int op)
 	case CEPH_OSD_OP_SETXATTR:
 	case CEPH_OSD_OP_CMPXATTR:
 	case CEPH_OSD_OP_CALL:
+	case CEPH_OSD_OP_NOTIFY:
 		return 1;
 	default:
 		return 0;
@@ -208,6 +214,8 @@ struct ceph_osd_request *ceph_osdc_alloc_request(struct ceph_osd_client *osdc,
 	init_completion(&req->r_completion);
 	init_completion(&req->r_safe_completion);
 	INIT_LIST_HEAD(&req->r_unsafe_item);
+	INIT_LIST_HEAD(&req->r_ling_item);
+	INIT_LIST_HEAD(&req->r_ling_osd);
 	req->r_flags = flags;
 
 	WARN_ON((flags & (CEPH_OSD_FLAG_READ|CEPH_OSD_FLAG_WRITE)) == 0);
@@ -313,6 +321,24 @@ static void osd_req_encode_op(struct ceph_osd_request *req,
 		dst->snap.snapid = cpu_to_le64(src->snap.snapid);
 		break;
 	case CEPH_OSD_OP_STARTSYNC:
+		break;
+	case CEPH_OSD_OP_NOTIFY:
+		{
+			__le32 prot_ver = cpu_to_le32(src->watch.prot_ver);
+			__le32 timeout = cpu_to_le32(src->watch.timeout);
+
+			BUG_ON(!req->r_trail);
+
+			ceph_pagelist_append(req->r_trail,
+						&prot_ver, sizeof(prot_ver));
+			ceph_pagelist_append(req->r_trail,
+						&timeout, sizeof(timeout));
+		}
+	case CEPH_OSD_OP_NOTIFY_ACK:
+	case CEPH_OSD_OP_WATCH:
+		dst->watch.cookie = cpu_to_le64(src->watch.cookie);
+		dst->watch.ver = cpu_to_le64(src->watch.ver);
+		dst->watch.flag = src->watch.flag;
 		break;
 	default:
 		pr_err("unrecognized osd opcode %d\n", dst->op);
@@ -463,6 +489,24 @@ struct ceph_osd_request *ceph_osdc_new_request(struct ceph_osd_client *osdc,
 }
 EXPORT_SYMBOL(ceph_osdc_new_request);
 
+void ceph_osdc_set_request_linger(struct ceph_osd_client *osdc,
+				  struct ceph_osd_request *req, int linger)
+{
+	if (linger == req->r_linger)
+		return;
+
+	req->r_linger = linger;
+
+	if (linger)
+		ceph_osdc_get_request(req);
+	else {
+		req->r_linger = 0;
+		ceph_osdc_remove_ling_req(osdc, req);
+		/* FIXME: remove request from linger list */
+	}
+}
+EXPORT_SYMBOL(ceph_osdc_set_request_linger);
+
 /*
  * We keep osd requests in an rbtree, sorted by ->r_tid.
  */
@@ -528,13 +572,29 @@ __lookup_request_ge(struct ceph_osd_client *osdc,
 	return NULL;
 }
 
+static void keep_ling_req(struct ceph_osd_client *osdc,
+			  struct ceph_osd_request *req)
+{
+	mutex_lock(&osdc->linger_mutex);
+	list_add_tail(&req->r_ling_item, &osdc->lingering_req);
+	list_add_tail(&req->r_ling_osd, &req->r_osd->o_ling_requests);
+	mutex_unlock(&osdc->linger_mutex);
+}
+
+static void __remove_ling_req(struct ceph_osd_client *osdc,
+			      struct ceph_osd_request *req)
+{
+	list_del_init(&req->r_ling_item);
+	list_del_init(&req->r_ling_osd);
+}
+
 /*
  * Resubmit requests pending on the given osd.
  */
 static void __kick_osd_requests(struct ceph_osd_client *osdc,
 				struct ceph_osd *kickosd)
 {
-	struct ceph_osd_request *req;
+	struct ceph_osd_request *req, *nreq;
 	struct rb_node *p;
 	int err;
 
@@ -552,6 +612,23 @@ static void __kick_osd_requests(struct ceph_osd_client *osdc,
 			req->r_flags |= CEPH_OSD_FLAG_RETRY;
 		}
 	}
+
+	mutex_lock(&osdc->linger_mutex);
+
+	list_for_each_entry_safe(req, nreq, &osdc->lingering_req, r_ling_item) {
+		dout("linger req=%p req->r_osd=%p\n", req, req->r_osd);
+		if (req->r_osd == kickosd) {
+			__remove_ling_req(osdc, req);
+			__register_request(osdc, req);
+			err = __send_request(osdc, req);
+			if (err) {
+				dout(" setting FLAG_RETRY on %llu\n", req->r_tid);
+				req->r_flags |= CEPH_OSD_FLAG_RETRY;
+			}
+		}
+	}
+
+	mutex_unlock(&osdc->linger_mutex);
 }
 
 static void kick_osd_requests(struct ceph_osd_client *osdc,
@@ -594,6 +671,7 @@ static struct ceph_osd *create_osd(struct ceph_osd_client *osdc)
 	atomic_set(&osd->o_ref, 1);
 	osd->o_osdc = osdc;
 	INIT_LIST_HEAD(&osd->o_requests);
+	INIT_LIST_HEAD(&osd->o_ling_requests);
 	INIT_LIST_HEAD(&osd->o_osd_lru);
 	osd->o_incarnation = 1;
 
@@ -681,9 +759,14 @@ static int __reset_osd(struct ceph_osd_client *osdc, struct ceph_osd *osd)
 {
 	struct ceph_osd_request *req;
 	int ret = 0;
+	int ling_empty;
+
+	mutex_lock(&osdc->linger_mutex);
+	ling_empty = list_empty(&osd->o_ling_requests);
+	mutex_unlock(&osdc->linger_mutex);
 
 	dout("__reset_osd %p osd%d\n", osd, osd->o_osd);
-	if (list_empty(&osd->o_requests)) {
+	if (list_empty(&osd->o_requests) && ling_empty) {
 		__remove_osd(osdc, osd);
 	} else if (memcmp(&osdc->osdmap->osd_addr[osd->o_osd],
 			  &osd->o_con.peer_addr,
@@ -756,10 +839,9 @@ static void __cancel_osd_timeout(struct ceph_osd_client *osdc)
  * Register request, assign tid.  If this is the first request, set up
  * the timeout event.
  */
-static void register_request(struct ceph_osd_client *osdc,
-			     struct ceph_osd_request *req)
+static void __register_request(struct ceph_osd_client *osdc,
+			       struct ceph_osd_request *req)
 {
-	mutex_lock(&osdc->request_mutex);
 	req->r_tid = ++osdc->last_tid;
 	req->r_request->hdr.tid = cpu_to_le64(req->r_tid);
 	INIT_LIST_HEAD(&req->r_req_lru_item);
@@ -773,6 +855,13 @@ static void register_request(struct ceph_osd_client *osdc,
 		dout(" first request, scheduling timeout\n");
 		__schedule_osd_timeout(osdc);
 	}
+}
+
+static void register_request(struct ceph_osd_client *osdc,
+			     struct ceph_osd_request *req)
+{
+	mutex_lock(&osdc->request_mutex);
+	__register_request(osdc, req);
 	mutex_unlock(&osdc->request_mutex);
 }
 
@@ -791,9 +880,14 @@ static void __unregister_request(struct ceph_osd_client *osdc,
 		ceph_con_revoke(&req->r_osd->o_con, req->r_request);
 
 		list_del_init(&req->r_osd_item);
-		if (list_empty(&req->r_osd->o_requests))
+		if (list_empty(&req->r_osd->o_requests) &&
+		    list_empty(&req->r_osd->o_ling_requests)) {
+			dout("moving osd to %p lru\n", req->r_osd);
 			__move_osd_to_lru(osdc, req->r_osd);
-		req->r_osd = NULL;
+		}
+		if (list_empty(&req->r_osd_item) &&
+		    list_empty(&req->r_ling_item))
+			req->r_osd = NULL;
 	}
 
 	ceph_osdc_put_request(req);
@@ -962,7 +1056,6 @@ static void handle_timeout(struct work_struct *work)
 		osdc->client->options->osd_keepalive_timeout * HZ;
 	unsigned long last_stamp = 0;
 	struct list_head slow_osds;
-
 	dout("timeout\n");
 	down_read(&osdc->map_sem);
 
@@ -1041,6 +1134,16 @@ static void handle_osds_timeout(struct work_struct *work)
 			      round_jiffies_relative(delay));
 }
 
+void ceph_osdc_remove_ling_req(struct ceph_osd_client *osdc,
+			       struct ceph_osd_request *req)
+{
+	mutex_lock(&osdc->linger_mutex);
+	__remove_ling_req(osdc, req);
+	mutex_unlock(&osdc->linger_mutex);
+}
+EXPORT_SYMBOL(ceph_osdc_remove_ling_req);
+
+
 /*
  * handle osd op reply.  either call the callback if it is specified,
  * or do the completion to wake up the waiting thread.
@@ -1064,7 +1167,6 @@ static void handle_reply(struct ceph_osd_client *osdc, struct ceph_msg *msg,
 	    numops * sizeof(struct ceph_osd_op))
 		goto bad;
 	dout("handle_reply %p tid %llu result %d\n", msg, tid, (int)result);
-
 	/* lookup */
 	mutex_lock(&osdc->request_mutex);
 	req = __lookup_request(osdc, tid);
@@ -1111,8 +1213,12 @@ static void handle_reply(struct ceph_osd_client *osdc, struct ceph_msg *msg,
 	/* either this is a read, or we got the safe response */
 	if (result < 0 ||
 	    (flags & CEPH_OSD_FLAG_ONDISK) ||
-	    ((flags & CEPH_OSD_FLAG_WRITE) == 0))
+	    ((flags & CEPH_OSD_FLAG_WRITE) == 0)) {
+		if (req->r_linger)
+			keep_ling_req(osdc, req);
+
 		__unregister_request(osdc, req);
+	}
 
 	mutex_unlock(&osdc->request_mutex);
 
@@ -1128,6 +1234,7 @@ static void handle_reply(struct ceph_osd_client *osdc, struct ceph_msg *msg,
 	}
 
 done:
+	dout("req=%p req->r_linger=%d\n", req, req->r_linger);
 	ceph_osdc_put_request(req);
 	return;
 
@@ -1153,6 +1260,47 @@ static void reset_changed_osds(struct ceph_osd_client *osdc)
 			   sizeof(struct ceph_entity_addr)) != 0)
 			__reset_osd(osdc, osd);
 	}
+}
+
+static int __kick_lingering_reqs(struct ceph_osd_client *osdc)
+{
+	struct ceph_osd_request *req, *nreq;
+	int err;
+	int needmap = 0;
+
+	mutex_lock(&osdc->linger_mutex);
+
+	list_for_each_entry_safe(req, nreq, &osdc->lingering_req, r_ling_item) {
+		dout("linger req=%p req->r_osd=%p\n", req, req->r_osd);
+
+		err = __map_request(osdc, req);
+		if (err == 0)
+			continue;  /* no change and no osd was specified */
+		if (err < 0) {
+			dout(" setting FLAG_RETRY on %llu\n", req->r_tid);
+			req->r_flags |= CEPH_OSD_FLAG_RETRY;
+			continue;
+		}
+		if (req->r_osd == NULL) {
+			dout("tid %llu maps to no valid osd\n", req->r_tid);
+			needmap++;  /* request a newer map */
+			continue;
+		}
+
+		dout("kicking lingering %p tid %llu osd%d\n", req, req->r_tid,
+		     req->r_osd ? req->r_osd->o_osd : -1);
+		__remove_ling_req(osdc, req);
+		__register_request(osdc, req);
+		err = __send_request(osdc, req);
+		if (err) {
+			dout(" setting FLAG_RETRY on %llu\n", req->r_tid);
+			req->r_flags |= CEPH_OSD_FLAG_RETRY;
+		}
+	}
+
+	mutex_unlock(&osdc->linger_mutex);
+
+	return needmap;
 }
 
 /*
@@ -1184,6 +1332,7 @@ static void kick_requests(struct ceph_osd_client *osdc)
 			req->r_flags |= CEPH_OSD_FLAG_RETRY;
 		}
 	}
+	needmap += __kick_lingering_reqs(osdc);
 	mutex_unlock(&osdc->request_mutex);
 
 	if (needmap) {
@@ -1304,6 +1453,215 @@ bad:
 	up_write(&osdc->map_sem);
 	return;
 }
+
+static void __insert_watcher(struct ceph_osd_client *osdc,
+			     struct ceph_osdc_watcher *new)
+{
+	struct rb_node **p = &osdc->watch_tree.rb_node;
+	struct rb_node *parent = NULL;
+	struct ceph_osdc_watcher *watcher = NULL;
+
+	while (*p) {
+		parent = *p;
+		watcher = rb_entry(parent, struct ceph_osdc_watcher, node);
+		if (new->cookie < watcher->cookie)
+			p = &(*p)->rb_left;
+		else if (new->cookie > watcher->cookie)
+			p = &(*p)->rb_right;
+		else
+			BUG();
+	}
+
+	rb_link_node(&new->node, parent, p);
+	rb_insert_color(&new->node, &osdc->watch_tree);
+}
+
+static struct ceph_osdc_watcher *__find_watcher(struct ceph_osd_client *osdc,
+					        u64 cookie)
+{
+	struct rb_node **p = &osdc->watch_tree.rb_node;
+	struct rb_node *parent = NULL;
+	struct ceph_osdc_watcher *watcher = NULL;
+
+	while (*p) {
+		parent = *p;
+		watcher = rb_entry(parent, struct ceph_osdc_watcher, node);
+		if (cookie < watcher->cookie)
+			p = &(*p)->rb_left;
+		else if (cookie > watcher->cookie)
+			p = &(*p)->rb_right;
+		else
+			return watcher;
+	}
+	return NULL;
+}
+
+static void __remove_watcher(struct kref *kref)
+{
+	struct ceph_osdc_watcher *watcher = container_of(kref,
+						    struct ceph_osdc_watcher,
+						    kref);
+	struct ceph_osd_client *osdc = watcher->osdc;
+
+	rb_erase(&watcher->node, &osdc->watch_tree);
+	kfree(watcher);
+}
+
+struct ceph_osdc_watcher *ceph_osdc_find_watcher(struct ceph_osd_client *osdc,
+					         u64 cookie)
+{
+	struct ceph_osdc_watcher *watcher;
+
+	spin_lock(&osdc->watch_lock);
+	watcher = __find_watcher(osdc, cookie);
+	kref_get(&watcher->kref);
+	spin_unlock(&osdc->watch_lock);
+
+	return watcher;
+}
+
+void ceph_osdc_put_watcher( struct ceph_osdc_watcher *watcher)
+{
+	struct ceph_osd_client *osdc = watcher->osdc;
+
+	spin_lock(&osdc->watch_lock);
+	kref_put(&watcher->kref, __remove_watcher);
+	spin_unlock(&osdc->watch_lock);
+}
+EXPORT_SYMBOL(ceph_osdc_put_watcher);
+
+static void ceph_osdc_get_watcher( struct ceph_osdc_watcher *watcher)
+{
+	struct ceph_osd_client *osdc = watcher->osdc;
+
+	spin_lock(&osdc->watch_lock);
+	kref_get(&watcher->kref);
+	spin_unlock(&osdc->watch_lock);
+}
+
+static void watcher_work(struct work_struct *work)
+{
+	struct ceph_osdc_watch_work *watch = container_of(work,
+			struct ceph_osdc_watch_work, work);
+	struct ceph_osdc_watcher *watcher = watch->watcher;
+	u64 ver = watch->ver;
+	u64 notify_id = watch->notify_id;
+	u8 opcode = watch->opcode;
+
+	watcher->cb(ver, notify_id, opcode, watcher->data);
+	dout("completing %p\n", &watcher->completion);
+	complete(&watcher->completion);
+	ceph_osdc_put_watcher(watcher);
+
+	kfree(watch);
+}
+
+int ceph_osdc_register_notify_msg(struct ceph_osd_client *osdc,
+				  void (*watch_cb)(u64, u64, u8, void *),
+				  void *data,
+				  struct ceph_osdc_watcher **pwatcher)
+{
+	struct ceph_osdc_watcher *watcher;
+
+	watcher = kmalloc(sizeof(*watcher), GFP_NOIO);
+	if (!watcher)
+		return -ENOMEM;
+
+	watcher->cb = watch_cb;
+	watcher->data = data;
+	watcher->osdc = osdc;
+	INIT_LIST_HEAD(&watcher->osd_node);
+	kref_init(&watcher->kref);
+	init_completion(&watcher->completion);
+
+	spin_lock(&osdc->watch_lock);
+	watcher->cookie = ++osdc->watch_count;
+	__insert_watcher(osdc, watcher);
+	spin_unlock(&osdc->watch_lock);
+
+	*pwatcher = watcher;
+
+	return 0;
+}
+EXPORT_SYMBOL(ceph_osdc_register_notify_msg);
+
+/*
+ * Process osd watch notifications
+ *
+ */
+void handle_watch_notify(struct ceph_osd_client *osdc, struct ceph_msg *msg)
+{
+	void *p, *end;
+	u8 proto_ver;
+	u64 cookie, ver, notify_id;
+	u8 opcode;
+	struct ceph_osdc_watcher *watcher;
+	struct ceph_osdc_watch_work *watch_work;
+
+	p = msg->front.iov_base;
+	end = p + msg->front.iov_len;
+
+	ceph_decode_8_safe(&p, end, proto_ver, bad);
+	ceph_decode_8_safe(&p, end, opcode, bad);
+	ceph_decode_64_safe(&p, end, cookie, bad);
+	ceph_decode_64_safe(&p, end, ver, bad);
+	ceph_decode_64_safe(&p, end, notify_id, bad);
+
+	watcher = ceph_osdc_find_watcher(osdc, cookie);
+	dout("handle_watch_notify cookie=%lld ver=%lld watcher=%p\n",
+	     cookie, ver, watcher);
+
+	if (watcher) {
+		watch_work = kmalloc(sizeof(*watch_work), GFP_NOIO);
+		INIT_WORK(&watch_work->work, watcher_work);
+		if (!watch_work) {
+			dout("ERROR: could not allocate watch_work\n");
+			goto done_err;
+		}
+		watch_work->watcher = watcher;
+		watch_work->ver = ver;
+		watch_work->notify_id = notify_id;
+		watch_work->opcode = opcode;
+		if (!queue_work(osdc->notify_wq, &watch_work->work)) {
+			dout("WARNING: failed to queue notify work\n");
+			goto done_err;
+		}
+	}
+
+	return;
+
+done_err:
+	complete(&watcher->completion);
+	ceph_osdc_put_watcher(watcher);
+
+	return;
+
+bad:
+	pr_err("osdc handle_watch_notify corrupt msg\n");
+	return;
+}
+
+int ceph_osdc_wait_watch_notify(struct ceph_osdc_watcher *watcher,
+				unsigned long timeout)
+{
+	int err;
+
+	ceph_osdc_get_watcher(watcher);
+
+	dout("waiting for completion on %p\n", &watcher->completion);
+
+	err = wait_for_completion_interruptible_timeout(&watcher->completion,
+							timeout * HZ);
+
+	ceph_osdc_put_watcher(watcher);
+
+	if (err > 0)
+		err = 0;
+
+	return err;
+}
+EXPORT_SYMBOL(ceph_osdc_wait_watch_notify);
+
 
 /*
  * Register request, send initial attempt.
@@ -1427,9 +1785,11 @@ int ceph_osdc_init(struct ceph_osd_client *osdc, struct ceph_client *client)
 	init_completion(&osdc->map_waiters);
 	osdc->last_requested_map = 0;
 	mutex_init(&osdc->request_mutex);
+	mutex_init(&osdc->linger_mutex);
 	osdc->last_tid = 0;
 	osdc->osds = RB_ROOT;
 	INIT_LIST_HEAD(&osdc->osd_lru);
+	INIT_LIST_HEAD(&osdc->lingering_req);
 	osdc->requests = RB_ROOT;
 	INIT_LIST_HEAD(&osdc->req_lru);
 	INIT_LIST_HEAD(&osdc->req_unsent);
@@ -1437,6 +1797,9 @@ int ceph_osdc_init(struct ceph_osd_client *osdc, struct ceph_client *client)
 	osdc->num_requests = 0;
 	INIT_DELAYED_WORK(&osdc->timeout_work, handle_timeout);
 	INIT_DELAYED_WORK(&osdc->osds_timeout_work, handle_osds_timeout);
+	spin_lock_init(&osdc->watch_lock);
+	osdc->watch_tree = RB_ROOT;
+	osdc->watch_count = 0;
 
 	schedule_delayed_work(&osdc->osds_timeout_work,
 	   round_jiffies_relative(osdc->client->options->osd_idle_ttl * HZ));
@@ -1456,6 +1819,13 @@ int ceph_osdc_init(struct ceph_osd_client *osdc, struct ceph_client *client)
 				"osd_op_reply");
 	if (err < 0)
 		goto out_msgpool;
+
+	osdc->notify_wq = create_singlethread_workqueue("ceph-watch-notify");
+	if (IS_ERR(osdc->notify_wq)) {
+		err = PTR_ERR(osdc->notify_wq);
+		osdc->notify_wq = NULL;
+		goto out_msgpool;
+	}
 	return 0;
 
 out_msgpool:
@@ -1469,6 +1839,8 @@ EXPORT_SYMBOL(ceph_osdc_init);
 
 void ceph_osdc_stop(struct ceph_osd_client *osdc)
 {
+	flush_workqueue(osdc->notify_wq);
+	destroy_workqueue(osdc->notify_wq);
 	cancel_delayed_work_sync(&osdc->timeout_work);
 	cancel_delayed_work_sync(&osdc->osds_timeout_work);
 	if (osdc->osdmap) {
@@ -1584,6 +1956,9 @@ static void dispatch(struct ceph_connection *con, struct ceph_msg *msg)
 	case CEPH_MSG_OSD_OPREPLY:
 		handle_reply(osdc, msg, con);
 		break;
+	case CEPH_MSG_WATCH_NOTIFY:
+		handle_watch_notify(osdc, msg);
+		break;
 
 	default:
 		pr_err("received unknown message type %d %s\n", type,
@@ -1677,6 +2052,7 @@ static struct ceph_msg *alloc_msg(struct ceph_connection *con,
 
 	switch (type) {
 	case CEPH_MSG_OSD_MAP:
+	case CEPH_MSG_WATCH_NOTIFY:
 		return ceph_msg_new(type, front, GFP_NOFS);
 	case CEPH_MSG_OSD_OPREPLY:
 		return get_reply(con, hdr, skip);
