@@ -27,6 +27,7 @@
 #define CEPH_MOUNT_OPT_DIRSTAT         (1<<4) /* `cat dirname` for stats */
 #define CEPH_MOUNT_OPT_RBYTES          (1<<5) /* dir st_bytes = rbytes */
 #define CEPH_MOUNT_OPT_NOASYNCREADDIR  (1<<7) /* no dcache readdir */
+#define CEPH_MOUNT_OPT_INO32           (1<<8) /* 32 bit inos */
 
 #define CEPH_MOUNT_OPT_DEFAULT    (CEPH_MOUNT_OPT_RBYTES)
 
@@ -324,6 +325,31 @@ static inline struct ceph_vino ceph_vino(struct inode *inode)
 	return ceph_inode(inode)->i_vino;
 }
 
+static inline ino_t ceph_ino_to_ino32(ino_t ino)
+{
+	ino ^= ino >> (sizeof(ino) * 8 - 32);
+	if (!ino)
+		ino = 1;
+	return ino;
+}
+
+#if BITS_PER_LONG == 32
+static inline ino_t ceph_translate_ino(struct super_block *sb, ino_t ino)
+{
+	return ino;
+}
+#else
+static inline struct ceph_fs_client *ceph_sb_to_client(struct super_block *sb);
+
+static inline ino_t ceph_translate_ino(struct super_block *sb, ino_t ino)
+{
+	if (ceph_test_mount_opt(ceph_sb_to_client(sb),
+				INO32))
+		ino = ceph_ino_to_ino32(ino) & ((1LL << 32) - 1);
+	return ino;
+}
+#endif
+
 /*
  * ino_t is <64 bits on many architectures, blech.
  *
@@ -333,9 +359,7 @@ static inline ino_t ceph_vino_to_ino(struct ceph_vino vino)
 {
 	ino_t ino = (ino_t)vino.ino;  /* ^ (vino.snap << 20); */
 #if BITS_PER_LONG == 32
-	ino ^= vino.ino >> (sizeof(u64)-sizeof(ino_t)) * 8;
-	if (!ino)
-		ino = 1;
+	ino = ceph_ino_to_ino32(ino);
 #endif
 	return ino;
 }
