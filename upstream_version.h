@@ -4,9 +4,9 @@
 /* upstream kernel version we are based on */
 #define CEPH_UPSTREAM_MAJOR 2
 #define CEPH_UPSTREAM_MINOR 6
-#define CEPH_UPSTREAM_SUBLEVEL 37
-#define CEPH_UPSTREAM_EXTRAVERSION ""
+#define CEPH_UPSTREAM_SUBLEVEL 38
+#define CEPH_UPSTREAM_EXTRAVERSION "-rc6"
 
-#define CEPH_VERSION "2.6.37"
+#define CEPH_VERSION "2.6.38-rc6"
 
 #endif
